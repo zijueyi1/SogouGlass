@@ -2,7 +2,9 @@
 
 给 **搜狗输入法 Mac 版** 的候选框换上 macOS 原生的「液态玻璃」：背后的内容实时折射、边缘带细亮线和柔和投影，和 Dock 是同一类玻璃效果。不是贴图，而是系统实时渲染的。
 
-<!-- 截图：把效果图放到 docs/ 里再在这里引用，例如 ![单行候选框](docs/single.png) -->
+![单行候选框：实时折射，跟随每一次输入](docs/single.jpg)
+
+![展开面板：展开，依然通透](docs/expanded.jpg)
 
 ## 原理
 
@@ -81,7 +83,7 @@ defaults write com.zijue.sogouglass maxRadius -float 16         # 最大圆角
 
 如果你喜欢这个小工具，欢迎打赏支持 ☕️
 
-<!-- 在这里放打赏二维码或链接 -->
+<img src="docs/wechat-tip.jpg" alt="微信赞赏码" width="260">
 
 ## 声明
 
