@@ -77,6 +77,7 @@ defaults write com.zijue.sogouglass maxRadius -float 16         # 最大圆角
 | `Skin/LiquidGlass/` | 透明皮肤（`skin.plist` + PNG，浅色 / 深色两套） |
 | `Skin/make_skin.swift` | 重新生成皮肤贴图：`swift Skin/make_skin.swift Skin/LiquidGlass overlay` |
 | `tools/` | 开发用：切换皮肤、候选框自动截图、玻璃样品墙 |
+| `promo/` | 宣传片：`record.swift` 录屏并记录候选框位置，`make_promo.swift` 合成广告风格视频，`make_soundtrack.swift` 合成原创配乐并合入视频 |
 
 ## 支持作者
 
