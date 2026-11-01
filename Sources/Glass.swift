@@ -3,9 +3,9 @@
 // 调参（改完一秒内生效）：
 //   defaults write com.zijue.sogouglass style -string clear|regular
 //   defaults write com.zijue.sogouglass cornerRadius -float 0      (<=0 胶囊形，圆角不超过 maxRadius)
-//   defaults write com.zijue.sogouglass maxRadius -float 20
+//   defaults write com.zijue.sogouglass maxRadius -float 16
 //   defaults write com.zijue.sogouglass insetX -float -6           (负数=玻璃比候选框宽出多少)
-//   defaults write com.zijue.sogouglass insetY -float -3
+//   defaults write com.zijue.sogouglass insetY -float -1
 //   defaults write com.zijue.sogouglass tint -string "1,1,1,0.0"   (r,g,b,a 着色)
 //   defaults write com.zijue.sogouglass variant -int 11            (内部玻璃变体 0-40，11 = 透镜玻璃)
 //   defaults write com.zijue.sogouglass adaptive -int 0            (0-2，随背景调整外观)
@@ -13,6 +13,7 @@
 //   defaults write com.zijue.sogouglass opacity -float 0.8         (玻璃整体不透明度)
 //   defaults write com.zijue.sogouglass shadowOpacity -float 0.12  (外投影，0 关闭)
 //   defaults write com.zijue.sogouglass shadowRadius -float 10
+//   defaults write com.zijue.sogouglass minimumBackgroundBrightness -float 0.58  (原生暗部托亮，0 关闭)
 // 内部属性改回默认需要重启本程序
 import AppKit
 
@@ -22,9 +23,9 @@ let defaults = UserDefaults.standard
 struct Config: Equatable {
     var style: NSGlassEffectView.Style = .clear
     var cornerRadius: CGFloat = 0
-    var maxRadius: CGFloat = 20
+    var maxRadius: CGFloat = 16
     var insetX: CGFloat = -6
-    var insetY: CGFloat = -3
+    var insetY: CGFloat = -1
     var tint: NSColor?
     // 以下为 NSGlassEffectView 的内部属性，-1 表示不改，保持系统默认
     var variant = 11        // 11 = 和 Dock 同类的透镜玻璃（clear 默认是 2，偏毛玻璃）
@@ -34,6 +35,7 @@ struct Config: Equatable {
     var opacity: CGFloat = 1
     var shadowOpacity: CGFloat = 0.12
     var shadowRadius: CGFloat = 10
+    var minimumBackgroundBrightness: CGFloat = 0.58
 
     static func load() -> Config {
         var c = Config()
@@ -57,6 +59,9 @@ struct Config: Equatable {
         if let o = num("opacity") { c.opacity = min(max(o, 0.05), 1) }
         c.shadowOpacity = num("shadowOpacity") ?? c.shadowOpacity
         c.shadowRadius = num("shadowRadius") ?? c.shadowRadius
+        if let floor = num("minimumBackgroundBrightness"), floor.isFinite {
+            c.minimumBackgroundBrightness = min(max(floor, 0), 1)
+        }
         return c
     }
 
@@ -86,6 +91,7 @@ final class GlassPanel: NSPanel {
     let glass = NSGlassEffectView()
     private let shadowLayer = CALayer()
     private let shadowMask = CAShapeLayer()
+    private let brightnessFloor = NSView()
     private var config = Config()
 
     init(level: Int) {
@@ -106,16 +112,34 @@ final class GlassPanel: NSPanel {
         shadowLayer.mask = shadowMask
         shadowMask.fillRule = .evenOdd
         root.layer?.addSublayer(shadowLayer)
+        // 与已验证样例相同：在同一块原生玻璃内进行 Lighten 合成。
+        // 用合成器的原生混合名称，不挂 CIFilter，不切换到 Core Image 进程内渲染。
+        brightnessFloor.wantsLayer = true
+        brightnessFloor.autoresizingMask = [.width, .height]
+        glass.contentView = brightnessFloor
         root.addSubview(glass)
         contentView = root
     }
 
     func apply(_ c: Config) {
         config = c
+        updateMaterial()
+        layoutGlass()
+    }
+
+    private func updateMaterial() {
+        let c = config
         glass.style = c.style
         glass.tintColor = c.tint
         applyPrivate(glass, c)
-        layoutGlass()
+        if c.minimumBackgroundBrightness > 0 {
+            let floor = c.minimumBackgroundBrightness
+            brightnessFloor.layer?.backgroundColor = NSColor(srgbRed: floor, green: floor, blue: floor, alpha: 1).cgColor
+            brightnessFloor.layer?.compositingFilter = "lightenBlendMode"
+        } else {
+            brightnessFloor.layer?.compositingFilter = nil
+            brightnessFloor.layer?.backgroundColor = NSColor.clear.cgColor
+        }
     }
 
     // 玻璃铺在窗口中间，阴影只画在玻璃外面（挖掉里面，免得透过透明玻璃把背景弄脏）
@@ -124,6 +148,7 @@ final class GlassPanel: NSPanel {
         let bounds = root.bounds
         let g = bounds.insetBy(dx: shadowMargin, dy: shadowMargin)
         glass.frame = g
+        brightnessFloor.frame = glass.bounds
         let r = config.radius(forHeight: g.height)
         glass.cornerRadius = r
 
@@ -151,6 +176,7 @@ final class GlassPanel: NSPanel {
     }
 }
 
+@MainActor
 final class Follower {
     private var sogouPIDs: Set<pid_t> = []
     private var watched: [CGWindowID: Int] = [:]      // 搜狗窗口 -> 层级
@@ -167,7 +193,9 @@ final class Follower {
     }
 
     func start() {
-        let t = Timer(timeInterval: 1.0 / 120.0, repeats: true) { [weak self] _ in self?.tick() }
+        let t = Timer(timeInterval: 1.0 / 120.0, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.tick() }
+        }
         RunLoop.main.add(t, forMode: .common)
     }
 

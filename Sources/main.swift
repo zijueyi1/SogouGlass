@@ -7,6 +7,7 @@ import ServiceManagement
 
 let skinVersion = "1"   // 皮肤内容有变化时加一，已安装的用户启动后会自动更新皮肤
 
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let follower = Follower()
     var statusItem: NSStatusItem!
@@ -65,6 +66,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(.separator())
 
         menu.addItem(item("液态玻璃", #selector(toggleGlass), on: follower.isEnabled))
+        menu.addItem(item("暗部托亮", #selector(toggleBackgroundLift), on: Config.load().minimumBackgroundBrightness > 0))
         let colorItem = NSMenuItem(title: "首选词颜色", action: nil, keyEquivalent: "")
         let colorMenu = NSMenu()
         let current = defaults.string(forKey: "hotColor") ?? SkinInstaller.HotColor.blue.rawValue
@@ -95,6 +97,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // 关掉玻璃时皮肤是全透明的，顺便切回默认皮肤，打开时再切回来
         if follower.isEnabled { SkinInstaller.switchTo(SkinInstaller.installedSkinURL.path) }
         else { SkinInstaller.switchTo(SkinInstaller.defaultSkinPath) }
+    }
+
+    @objc func toggleBackgroundLift() {
+        defaults.set(Config.load().minimumBackgroundBrightness > 0 ? 0.0 : 0.58, forKey: "minimumBackgroundBrightness")
     }
 
     @objc func pickColor(_ sender: NSMenuItem) {
@@ -158,6 +164,6 @@ if let i = args.firstIndex(of: "--demo"), i + 1 < args.count {
     }
 }
 
-let delegate = AppDelegate()
+let delegate = MainActor.assumeIsolated { AppDelegate() }
 app.delegate = delegate
 app.run()

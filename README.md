@@ -45,6 +45,21 @@ cd SogouGlass
 
 退出 SogouGlass 时会自动切回搜狗默认皮肤（透明皮肤没有玻璃会只剩文字），下次启动再切回来。
 
+### 暗部托亮
+
+菜单中的「暗部托亮」使用原生 Lighten 混合，把玻璃中低于托底值的颜色抬亮，让深色背景下的候选字更清晰；高于托底值的颜色维持原样。文字、透明皮肤、透镜变体保持原版。
+
+该功能由系统合成器在显示时处理，不轮询截图、不需要屏幕录制权限，也没有截图判断后的遮罩切换等待。默认托底值为 `0.58`。Lighten 按颜色通道混合，彩色背景中的暗色分量也可能变浅。
+
+关闭「暗部托亮」即可恢复原版通透材质。也可以实时调整托底值：
+
+```bash
+defaults write com.zijue.sogouglass minimumBackgroundBrightness -float 0.58
+defaults write com.zijue.sogouglass minimumBackgroundBrightness -float 0  # 关闭
+```
+
+`v1.0.2` 默认参数为：托底值 `0.58`、最大圆角 `16pt`、左右外扩 `6pt`、上下外扩 `1pt`。安装后自动启用暗部托亮，可在菜单中关闭。
+
 ## 调参
 
 改完一秒内生效，不用重启：
