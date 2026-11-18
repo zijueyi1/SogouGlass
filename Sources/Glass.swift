@@ -21,6 +21,7 @@ import AppKit
 let defaults = UserDefaults.standard
 
 struct Config: Equatable {
+    var useSystemMaterial = true
     var style: NSGlassEffectView.Style = .clear
     var cornerRadius: CGFloat = 0
     var maxRadius: CGFloat = 16
@@ -61,6 +62,18 @@ struct Config: Equatable {
         c.shadowRadius = num("shadowRadius") ?? c.shadowRadius
         if let floor = num("minimumBackgroundBrightness"), floor.isFinite {
             c.minimumBackgroundBrightness = min(max(floor, 0), 1)
+        }
+        c.useSystemMaterial = defaults.string(forKey: "materialPreset") == "system"
+        if c.useSystemMaterial {
+            // 系统公开的通透材质；regular 的厚底色会改变透明候选框的外观。
+            c.style = .clear
+            c.variant = -1
+            c.scrim = -1
+            c.subdued = -1
+            c.adaptive = -1
+            c.tint = nil
+            c.opacity = 1
+            c.minimumBackgroundBrightness = 0
         }
         return c
     }
@@ -123,6 +136,7 @@ final class GlassPanel: NSPanel {
 
     func apply(_ c: Config) {
         config = c
+        hasShadow = false
         updateMaterial()
         layoutGlass()
     }
@@ -183,23 +197,57 @@ final class Follower {
     private var panels: [CGWindowID: GlassPanel] = [:]
     private var config = Config.load()
     private var lastScan = Date.distantPast
-    private var lastVisible = Date.distantPast
-    private var tickCount = 0
+    private var lastActivity = Date.distantPast
     private var skinActive = true
+    private var otherWindowIDs: Set<CGWindowID> = []
+    private var lastSeen: [CGWindowID: Date] = [:]
+    private var lastWindowPoll = Date.distantPast
+    private var timer: Timer?
+    private var pollInterval: TimeInterval = 0
+
+    // 真正降低定时器唤醒频率，而不是让 120Hz 定时器不断空转。
+    private let activeInterval: TimeInterval = 1.0 / 60.0
+    private let idleInterval: TimeInterval = 0.1
 
     // 暂停时收起所有玻璃
     var isEnabled = true {
-        didSet { if !isEnabled { panels.values.forEach { $0.orderOut(nil) } } }
+        didSet {
+            if !isEnabled { hidePanels() }
+            lastScan = .distantPast
+            updateTimer()
+        }
     }
 
     func start() {
-        let t = Timer(timeInterval: 1.0 / 120.0, repeats: true) { [weak self] _ in
+        guard timer == nil else { return }
+        tick()
+    }
+
+    private func hidePanels() {
+        for panel in panels.values where panel.isVisible { panel.orderOut(nil) }
+    }
+
+    private func updateTimer() {
+        let interval: TimeInterval
+        if !isEnabled || !skinActive || sogouPIDs.isEmpty {
+            interval = 1.0
+        } else if Date().timeIntervalSince(lastActivity) <= 0.5 {
+            interval = activeInterval
+        } else {
+            interval = idleInterval
+        }
+        guard timer == nil || pollInterval != interval else { return }
+        timer?.invalidate()
+        pollInterval = interval
+        let t = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.tick() }
         }
+        t.tolerance = interval * 0.1
+        timer = t
         RunLoop.main.add(t, forMode: .common)
     }
 
-    // 每秒重新扫描一次搜狗的弹出窗口（层级很高的那些）
+    // 每秒刷新配置和搜狗进程，不再全量读取窗口属性。
     private func rescan() {
         lastScan = Date()
         defaults.synchronize()   // 读到 defaults write 的最新值
@@ -207,32 +255,58 @@ final class Follower {
         if newConfig != config { config = newConfig; panels.values.forEach { $0.apply(config) } }
         // 用户在搜狗里换成了别的（不透明）皮肤，就不再垫玻璃
         skinActive = SkinInstaller.isActive
-        if !skinActive { panels.values.forEach { $0.orderOut(nil) } }
+        if !skinActive { hidePanels() }
 
-        sogouPIDs = Set(NSWorkspace.shared.runningApplications
+        let newPIDs = Set(NSWorkspace.shared.runningApplications
             .filter { ($0.bundleIdentifier ?? "").hasPrefix("com.sogou.inputmethod") }
             .map { $0.processIdentifier })
-        guard let all = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] else { return }
-        var found: [CGWindowID: Int] = [:]
-        for w in all {
-            guard let pid = w[kCGWindowOwnerPID as String] as? pid_t, sogouPIDs.contains(pid),
-                  let id = w[kCGWindowNumber as String] as? CGWindowID,
-                  let layer = w[kCGWindowLayer as String] as? Int, layer >= 1000 else { continue }
-            found[id] = layer
+        if newPIDs != sogouPIDs {
+            sogouPIDs = newPIDs
+            watched.removeAll()
+            otherWindowIDs.removeAll()
+            lastSeen.removeAll()
+            for panel in panels.values { panel.close() }
+            panels.removeAll()
         }
-        watched = found
-        for id in panels.keys where found[id] == nil { panels.removeValue(forKey: id)?.close() }
+        // 没有搜狗进程或用户已换皮肤时，不扫描其他应用的窗口。
+        guard skinActive, !sogouPIDs.isEmpty else {
+            watched.removeAll()
+            for panel in panels.values { panel.close() }
+            panels.removeAll()
+            return
+        }
+        // 清理已经消失的候选窗，不保留长期累积的窗口和图层。
+        let cutoff = Date().addingTimeInterval(-10)
+        for id in Array(lastSeen.keys) where lastSeen[id]! < cutoff {
+            lastSeen.removeValue(forKey: id)
+            watched.removeValue(forKey: id)
+            panels.removeValue(forKey: id)?.close()
+        }
     }
 
     private func tick() {
+        defer { updateTimer() }
         guard isEnabled else { return }
-        tickCount &+= 1
         let now = Date()
-        // 候选框 2 秒没出现就降到 40Hz 轮询，出现后立刻回到 120Hz
-        if now.timeIntervalSince(lastVisible) > 2, tickCount % 3 != 0 { return }
         if now.timeIntervalSince(lastScan) > 1 { rescan() }
-        guard skinActive, !watched.isEmpty else { return }
-        let ids = Array(watched.keys)
+        guard skinActive, !sogouPIDs.isEmpty else { return }
+        // 没有近期键鼠活动时，仅每秒做一次兜底发现，静止的候选窗也不持续高频轮询。
+        // 这里只读系统提供的空闲时长，不接收事件内容，也不安装键盘钩子。
+        if now.timeIntervalSince(lastWindowPoll) < 1, SGInputIdleSeconds() > 0.35 {
+            return
+        }
+        lastWindowPoll = now
+        // ID 列表不含窗口属性字典。只为新出现的窗口和可见的搜狗窗口取详细属性；
+        // 候选窗隐藏时不再反复向 WindowServer 请求它的完整描述。
+        guard let data = SGCopyVisibleWindowIDs() as Data? else {
+            hidePanels()
+            return
+        }
+        let visibleIDs = data.withUnsafeBytes { Set($0.bindMemory(to: CGWindowID.self)) }
+        otherWindowIDs.formIntersection(visibleIDs)
+        for (id, panel) in panels where !visibleIDs.contains(id) && panel.isVisible { panel.orderOut(nil) }
+        let ids = Array(visibleIDs.subtracting(otherWindowIDs))
+        guard !ids.isEmpty else { return }
         var ptrs = ids.map { UnsafeRawPointer(bitPattern: UInt($0)) }
         guard let arr = CFArrayCreate(nil, &ptrs, ptrs.count, nil),
               let desc = CGWindowListCreateDescriptionFromArray(arr) as? [[String: Any]] else { return }
@@ -241,6 +315,13 @@ final class Follower {
 
         for w in desc {
             guard let id = w[kCGWindowNumber as String] as? CGWindowID else { continue }
+            guard let pid = w[kCGWindowOwnerPID as String] as? pid_t, sogouPIDs.contains(pid) else {
+                otherWindowIDs.insert(id)
+                continue
+            }
+            guard let layer = w[kCGWindowLayer as String] as? Int, layer >= 1000 else { continue }
+            watched[id] = layer
+            lastSeen[id] = now
             seen.insert(id)
             let onscreen = (w[kCGWindowIsOnscreen as String] as? Bool) ?? false
             let alpha = (w[kCGWindowAlpha as String] as? Double) ?? 0
@@ -248,7 +329,7 @@ final class Follower {
             if let b = w[kCGWindowBounds as String] as? NSDictionary { r = CGRect(dictionaryRepresentation: b) ?? .zero }
 
             guard onscreen, alpha > 0.01, r.width > 24, r.height > 16 else {
-                panels[id]?.orderOut(nil)
+                if let panel = panels[id], panel.isVisible { panel.orderOut(nil) }
                 continue
             }
             // CG 坐标（左上原点）-> AppKit 坐标（左下原点）
@@ -260,10 +341,14 @@ final class Follower {
                 panels[id] = p
                 return p
             }()
+            if !panel.isVisible || panel.frame != glassFrame.insetBy(dx: -shadowMargin, dy: -shadowMargin) {
+                lastActivity = now
+            }
             panel.place(glassFrame: glassFrame)
             if !panel.isVisible { panel.orderFrontRegardless() }
-            lastVisible = now
         }
-        for id in watched.keys where !seen.contains(id) { panels[id]?.orderOut(nil) }
+        for id in watched.keys where !seen.contains(id) {
+            if let panel = panels[id], panel.isVisible { panel.orderOut(nil) }
+        }
     }
 }

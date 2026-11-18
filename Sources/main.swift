@@ -66,7 +66,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(.separator())
 
         menu.addItem(item("液态玻璃", #selector(toggleGlass), on: follower.isEnabled))
-        menu.addItem(item("暗部托亮", #selector(toggleBackgroundLift), on: Config.load().minimumBackgroundBrightness > 0))
+        menu.addItem(item("苹果原生通透材质", #selector(useSystemMaterial), on: Config.load().useSystemMaterial))
+        menu.addItem(item("透镜材质（原样）", #selector(useLensMaterial), on: !Config.load().useSystemMaterial))
+        let brightnessItem = item("暗部托亮", #selector(toggleBackgroundLift), on: Config.load().minimumBackgroundBrightness > 0)
+        brightnessItem.isEnabled = !Config.load().useSystemMaterial
+        menu.addItem(brightnessItem)
         let colorItem = NSMenuItem(title: "首选词颜色", action: nil, keyEquivalent: "")
         let colorMenu = NSMenu()
         let current = defaults.string(forKey: "hotColor") ?? SkinInstaller.HotColor.blue.rawValue
@@ -102,6 +106,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc func toggleBackgroundLift() {
         defaults.set(Config.load().minimumBackgroundBrightness > 0 ? 0.0 : 0.58, forKey: "minimumBackgroundBrightness")
     }
+
+    @objc func useSystemMaterial() { defaults.set("system", forKey: "materialPreset") }
+    @objc func useLensMaterial() { defaults.set("lens", forKey: "materialPreset") }
 
     @objc func pickColor(_ sender: NSMenuItem) {
         guard let raw = sender.representedObject as? String, let c = SkinInstaller.HotColor(rawValue: raw) else { return }

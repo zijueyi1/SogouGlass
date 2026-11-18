@@ -30,7 +30,8 @@ fi
 echo "正在编译 SogouGlass ..."
 rm -rf "$BUILD"
 mkdir -p "$BUILD/Contents/MacOS" "$BUILD/Contents/Resources"
-xcrun swiftc -O -target "$(uname -m)-apple-macos26.0" -o "$BUILD/Contents/MacOS/SogouGlass" Sources/*.swift
+xcrun clang -O2 -target "$(uname -m)-apple-macos26.0" -c Sources/WindowIDs.c -o build/WindowIDs.o
+xcrun swiftc -O -import-objc-header Sources/WindowIDs.h -target "$(uname -m)-apple-macos26.0" -o "$BUILD/Contents/MacOS/SogouGlass" Sources/*.swift build/WindowIDs.o
 cp Resources/Info.plist "$BUILD/Contents/Info.plist"
 cp -R Skin/LiquidGlass "$BUILD/Contents/Resources/LiquidGlass"
 codesign --force --deep --sign - "$BUILD" >/dev/null 2>&1
